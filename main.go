@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
@@ -67,19 +70,24 @@ func main() {
 
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		log.Printf("Fetching refs for PR %d", n)
 		if err := cmd.Run(); err != nil {
 			log.Fatal(fmt.Errorf("invoking fetch: %v", err))
 		}
 
+		log.Printf("Fetching details for PR %d", n)
 		pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
 		if err != nil {
 			log.Fatal(err)
 		}
 
+		buf := bytes.NewBuffer(make([]byte, 0, 1024))
+		printPR(ctx, buf, pr)
+
 		base := *pr.Base.SHA
 		head := *pr.Head.SHA
 
-		pretty := `--pretty=tformat:%C(yellow)commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
+		pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
 		cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", base, head))
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -88,24 +96,97 @@ func main() {
 		if err := cmd.Start(); err != nil {
 			log.Fatal(err)
 		}
-		showOutput, err := ioutil.ReadAll(stdout)
-		if err != nil {
+		if _, err := buf.ReadFrom(stdout); err != nil {
 			log.Fatal(err)
 		}
 		if err := cmd.Wait(); err != nil {
 			log.Fatal(err)
 		}
 
-		updated := editText(showOutput)
+		updated := editText(buf.Bytes())
 
-		comments, err := parseFile(updated)
+		request, err := parseFile(updated)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		postComments(ctx, n, comments)
+		postComments(ctx, n, request)
 	}
 }
+
+const timeFormat = "2006-01-02 15:04:05"
+
+func printPR(ctx context.Context, w io.Writer, pr *github.PullRequest) error {
+	// Fool Vim's filetype detector for Git commit messages
+	fmt.Fprint(w, "commit 0000000000000000000000000000000000000000\n")
+	fmt.Fprintf(w, "Author: %s\n", getUserLogin(pr.User))
+	fmt.Fprintf(w, "Date:   %s\n", getTime(pr.CreatedAt).Format(timeFormat))
+	fmt.Fprintf(w, "Title:  %s\n", getString(pr.Title))
+	fmt.Fprintf(w, "State:  %s\n", getString(pr.State))
+	if pr.MergedAt != nil {
+		fmt.Fprintf(w, "Merged: %s\n", getTime(pr.MergedAt).Format(timeFormat))
+	}
+	if pr.ClosedAt != nil {
+		fmt.Fprintf(w, "Closed: %s\n", getTime(pr.ClosedAt).Format(timeFormat))
+	}
+	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pulls/%d\n", projectOwner, projectRepo, getInt(pr.Number))
+
+	fmt.Fprintf(w, "\nCreated by %s (%s)\n", getUserLogin(pr.User), getTime(pr.CreatedAt).Format(timeFormat))
+	if pr.Body != nil {
+		text := strings.TrimSpace(*pr.Body)
+		if text != "" {
+			fmt.Fprintf(w, "\n\t%s\n", wrap(text, "\t"))
+		}
+	}
+
+	for page := 1; ; {
+		list, resp, err := client.Issues.ListComments(ctx, projectOwner, projectRepo, getInt(pr.Number), &github.IssueListCommentsOptions{
+			ListOptions: github.ListOptions{
+				Page:    page,
+				PerPage: 100,
+			},
+		})
+		for _, com := range list {
+			fmt.Fprintf(w, "\nComment by %s (%s)\n", getUserLogin(com.User), getTime(com.CreatedAt).Format(timeFormat))
+			if com.Body != nil {
+				text := strings.TrimSpace(*com.Body)
+				if text != "" {
+					fmt.Fprintf(w, "\n\t%s\n", wrap(text, "\t"))
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if resp.NextPage < page {
+			break
+		}
+		page = resp.NextPage
+	}
+	fmt.Fprint(w, "\n")
+	fmt.Fprintf(w, `
+# Add top-level review comments by typing between the marker lines below.
+# Don't modify the markers!
+# Approve this PR by typing "APPROVE" on a line by itself.
+# Request changes on this PR by typing "DENY" on a line by itself.
+
+%s
+%s
+
+# Add ordinary review comments by typing on a new line below the line of the
+# diff you'd like to comment on. Comments may not begin with the special
+# characters <space>, +, -, @, or *.
+#
+# Pre-existing comments are prefixed with *.
+
+`, topLevelStartMarker, topLevelEndMarker)
+	return nil
+}
+
+var (
+	topLevelStartMarker = "# ------ BEGIN  TOP-LEVEL REVIEW COMMENTS ----- #"
+	topLevelEndMarker   = "# ------ END OF TOP-LEVEL REVIEW COMMENTS ----- #"
+)
 
 func editText(original []byte) []byte {
 	f, err := ioutil.TempFile("", "re-edit-")
@@ -158,6 +239,29 @@ func runEditor(filename string) error {
 	return nil
 }
 
+func wrap(t string, prefix string) string {
+	out := ""
+	t = strings.Replace(t, "\r\n", "\n", -1)
+	lines := strings.Split(t, "\n")
+	for i, line := range lines {
+		if i > 0 {
+			out += "\n" + prefix
+		}
+		s := line
+		for len(s) > 70 {
+			i := strings.LastIndex(s[:70], " ")
+			if i < 0 {
+				i = 69
+			}
+			i++
+			out += s[:i] + "\n" + prefix
+			s = s[i:]
+		}
+		out += s
+	}
+	return out
+}
+
 var client *github.Client
 
 // GitHub personal access token, from https://github.com/settings/applications.
@@ -198,16 +302,40 @@ func (t *tokenSource) Token() (*oauth2.Token, error) {
 	return (*oauth2.Token)(t), nil
 }
 
+func getInt(x *int) int {
+	if x == nil {
+		return 0
+	}
+	return *x
+}
+
+func getString(x *string) string {
+	if x == nil {
+		return ""
+	}
+	return *x
+}
+
+func getUserLogin(x *github.User) string {
+	if x == nil || x.Login == nil {
+		return ""
+	}
+	return *x.Login
+}
+
+func getTime(x *time.Time) time.Time {
+	if x == nil {
+		return time.Time{}
+	}
+	return *x
+}
+
 var commitStart = regexp.MustCompile(`^commit (.*)$`)
 var diffStart = `diff --git `
 var fileStart = regexp.MustCompile(`^\+\+\+ b\/(.*)$`)
 var hunkStart = `@@`
 
-type commitMap = map[string]fileMap
-type fileMap = map[string]commentMap
-type commentMap = map[int]string
-
-func parseFile(b []byte) (commitMap, error) {
+func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 	dat := string(b)
 
 	commit := ""
@@ -215,45 +343,69 @@ func parseFile(b []byte) (commitMap, error) {
 	num := 0
 	foundFirstHunk := false
 
-	comments := make(commitMap)
 	commentStart := -1
 	lastCommentStart := -1
 
+	topLevelCommentStart := 0
+
+	review := &github.PullRequestReviewRequest{}
+
 	off := 0
 	for _, line := range strings.SplitAfter(dat, "\n") {
+		lastCommentStart = commentStart
+		commentStart = -1
 		if line == "" {
 			break
 		}
+
 		off += len(line)
 		line = strings.TrimRight(line, "\n")
-		lastCommentStart = commentStart
-		commentStart = -1
 
+		// Process top level comments.
+		if line == topLevelStartMarker {
+			topLevelCommentStart = off
+			continue
+		} else if line == topLevelEndMarker {
+			body := string(dat[topLevelCommentStart : off-len(line)-2])
+			review.Body = &body
+			topLevelCommentStart = 0
+			continue
+		} else if topLevelCommentStart != 0 {
+			continue
+		}
+
+		// Process commit header.
 		commitMatches := commitStart.FindStringSubmatch(line)
 		if len(commitMatches) > 1 {
 			foundFirstHunk = false
 			commit = commitMatches[1]
+			review.CommitID = &commit
 			continue
 		}
 
+		// Process diff header. This means we're in a diff until wee see another
+		// diff or commit marker.
 		if strings.HasPrefix(line, diffStart) {
 			foundFirstHunk = false
 			continue
 		}
 
+		// Process file header.
 		fileMatches := fileStart.FindStringSubmatch(line)
 		if len(fileMatches) > 1 {
 			file = fileMatches[1]
 			continue
 		}
+		// Process first hunk header.
 		if !foundFirstHunk {
 			if strings.HasPrefix(line, hunkStart) {
 				foundFirstHunk = true
-				num = 1
+				num = 0
 			}
 			continue
 		}
 
+		// Process special diff first-chars.
 		if len(line) > 0 {
 			switch line[0] {
 			case '+', '-', ' ', '@':
@@ -268,39 +420,32 @@ func parseFile(b []byte) (commitMap, error) {
 		commentStart = lastCommentStart
 		if commentStart == -1 {
 			commentStart = off - len(line) - 1
+			review.Comments = append(review.Comments,
+				makeDraftReviewComment(file, num))
 		}
-		if comments[commit] == nil {
-			comments[commit] = make(fileMap)
-		}
-		if comments[commit][file] == nil {
-			comments[commit][file] = make(commentMap)
-		}
-		comments[commit][file][num] = dat[commentStart:off]
+		c := review.Comments[len(review.Comments)-1]
+		body := dat[commentStart : off-1]
+		c.Body = &body
 	}
 
-	return comments, nil
+	return review, nil
 }
 
-func postComments(ctx context.Context, pr int, c commitMap) error {
-	review := &github.PullRequestReviewRequest{}
-	for _, fileMap := range c {
-		for f, commentMap := range fileMap {
-			file := f
-			for o := range commentMap {
-				offset := o
-				comment := commentMap[o]
-				req := &github.DraftReviewComment{
-					Path:     &file,
-					Position: &offset,
-					Body:     &comment,
-				}
-				review.Comments = append(review.Comments, req)
-			}
-		}
+func makeDraftReviewComment(path string, position int) *github.DraftReviewComment {
+	return &github.DraftReviewComment{
+		Path:     &path,
+		Position: &position,
 	}
-	_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
-	if err != nil {
-		return err
+}
+
+func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) error {
+	log.Printf("Submitting %d comments...\n", len(review.Comments))
+	fmt.Println(review)
+	if len(review.Comments) > 0 {
+		_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
