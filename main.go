@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
+
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 )
@@ -143,12 +145,12 @@ func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestRe
 			request.Event = nil
 			return request
 		case 's':
-			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", *pr.ID))
+			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", *pr.Number))
 			err := cpCmd.Run()
 			if err != nil {
 				log.Fatal(err)
 			}
-			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", *pr.ID))
+			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", *pr.Number))
 		case 'p':
 			editReview = false
 			fmt.Println(request)
@@ -159,6 +161,7 @@ func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestRe
 			exitHappy()
 		case '?':
 			editReview = false
+			color.Set(color.FgRed, color.Bold)
 			fmt.Println("y - submit comments")
 			fmt.Println("a - submit and approve")
 			fmt.Println("r - submit and request changes")
@@ -168,13 +171,16 @@ func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestRe
 			fmt.Println("e - edit review")
 			fmt.Println("q - quit; abandon review")
 			fmt.Println("? - print help")
+			color.Unset()
 			continue
 		}
 	}
 }
 
 func exitHappy(args ...interface{}) {
-	fmt.Println(args...)
+	if len(args) > 0 {
+		fmt.Println(args...)
+	}
 	os.Exit(0)
 }
 
@@ -228,7 +234,7 @@ const timeFormat = "2006-01-02 15:04:05"
 func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest) error {
 	// Fool tpope/vim-git's filetype detector for Git commit messages
 	fmt.Fprint(w, "commit 0000000000000000000000000000000000000000\n")
-	fmt.Fprintf(w, "Author: %s <%s>\n", getUserLogin(pr.User), pr.User.Email)
+	fmt.Fprintf(w, "Author: %s <>\n", getUserLogin(pr.User))
 	fmt.Fprintf(w, "Date:   %s\n", getTime(pr.CreatedAt).Format(timeFormat))
 	fmt.Fprintf(w, "Title:  %s\n", getString(pr.Title))
 	fmt.Fprintf(w, "State:  %s\n", getString(pr.State))
@@ -544,12 +550,11 @@ func makeDraftReviewComment(path string, position int) *github.DraftReviewCommen
 }
 
 func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) error {
-	log.Printf("Submitting %d comments...\n", len(review.Comments))
-	if len(review.Comments) > 0 {
-		_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
-		if err != nil {
-			return err
-		}
+	fmt.Printf("Submitting review... ")
+	_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
+	if err != nil {
+		return err
 	}
+	fmt.Printf("success.\n")
 	return nil
 }
