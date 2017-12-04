@@ -145,7 +145,7 @@ func readPipe(cmd *exec.Cmd, buf *bytes.Buffer) error {
 	if _, err := errBuf.ReadFrom(stderr); err != nil {
 		log.Fatal(fmt.Errorf("ReadFrom: %v", err))
 	}
-	if len(errBuf) != 0 {
+	if errBuf.Len() != 0 {
 		fmt.Println(errBuf)
 	}
 	if err := cmd.Wait(); err != nil {
