@@ -68,7 +68,7 @@ func main() {
 		if *resume != "" {
 			filename = *resume
 		} else {
-			cmd := exec.Command("git", "fetch", "https://github.com/cockroachdb/cockroach", fmt.Sprintf("refs/pull/%d/head:reviews/pr/%d", n, n))
+			cmd := exec.Command("git", "fetch", "-f", "https://github.com/cockroachdb/cockroach", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			log.Printf("Fetching refs for PR %d", n)
@@ -145,7 +145,9 @@ func readPipe(cmd *exec.Cmd, buf *bytes.Buffer) error {
 	if _, err := errBuf.ReadFrom(stderr); err != nil {
 		log.Fatal(fmt.Errorf("ReadFrom: %v", err))
 	}
-	fmt.Println(errBuf)
+	if len(errBuf) != 0 {
+		fmt.Println(errBuf)
+	}
 	if err := cmd.Wait(); err != nil {
 		log.Fatal(fmt.Errorf("cmd.Wait: %v", err))
 	}
