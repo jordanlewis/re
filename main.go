@@ -440,7 +440,6 @@ func makeDraftReviewComment(path string, position int) *github.DraftReviewCommen
 
 func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) error {
 	log.Printf("Submitting %d comments...\n", len(review.Comments))
-	fmt.Println(review)
 	if len(review.Comments) > 0 {
 		_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
 		if err != nil {
