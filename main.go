@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"flag"
@@ -84,42 +85,150 @@ func main() {
 		buf := bytes.NewBuffer(make([]byte, 0, 1024))
 		printPR(ctx, buf, pr)
 
-		base := *pr.Base.SHA
-		head := *pr.Head.SHA
-
 		pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
-		cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", base, head))
-		stdout, err := cmd.StdoutPipe()
+		cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
+		if err := readPipe(cmd, buf); err != nil {
+			log.Fatal(err)
+		}
+
+		f, err := ioutil.TempFile("", "re-edit-")
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := cmd.Start(); err != nil {
+		if err := ioutil.WriteFile(f.Name(), buf.Bytes(), 0666); err != nil {
 			log.Fatal(err)
 		}
-		if _, err := buf.ReadFrom(stdout); err != nil {
-			log.Fatal(err)
-		}
-		if err := cmd.Wait(); err != nil {
-			log.Fatal(err)
-		}
+		f.Close()
 
-		updated := editText(buf.Bytes())
-
-		request, err := parseFile(updated)
-		if err != nil {
-			log.Fatal(err)
-		}
-
+		request := decisionLoop(pr, f.Name())
 		postComments(ctx, n, request)
 	}
 }
 
+var (
+	reviewApprove        = "APPROVE"
+	reviewRequestChanges = "REQUEST_CHANGES"
+	reviewComment        = "COMMENT"
+)
+
+func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestReviewRequest {
+	defer os.Remove(filename)
+	stdin := bufio.NewReader(os.Stdin)
+	editReview := true
+	var request *github.PullRequestReviewRequest
+	for {
+		if editReview {
+			request = handleParseError(filename)
+		}
+		editReview = true
+
+		fmt.Printf("Submit this review [y,a,r,d,s,p,e,q,?]? ")
+		text, err := stdin.ReadString('\n')
+		if err != nil && err != io.EOF {
+			log.Fatal(err)
+		} else if err == io.EOF {
+			exitHappy()
+		}
+		switch text[0] {
+		case 'y':
+			request.Event = &reviewComment
+			return request
+		case 'a':
+			request.Event = &reviewApprove
+			return request
+		case 'r':
+			request.Event = &reviewRequestChanges
+			return request
+		case 'd':
+			request.Event = nil
+			return request
+		case 's':
+			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", *pr.ID))
+			err := cpCmd.Run()
+			if err != nil {
+				log.Fatal(err)
+			}
+			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", *pr.ID))
+		case 'p':
+			editReview = false
+			fmt.Println(request)
+			continue
+		case 'e':
+			continue
+		case 'q':
+			exitHappy()
+		case '?':
+			editReview = false
+			fmt.Println("y - submit comments")
+			fmt.Println("a - submit and approve")
+			fmt.Println("r - submit and request changes")
+			fmt.Println("d - publish as draft")
+			fmt.Println("s - save review locally and quit; resume with re <pr> resume")
+			fmt.Println("p - preview review")
+			fmt.Println("e - edit review")
+			fmt.Println("q - quit; abandon review")
+			fmt.Println("? - print help")
+			continue
+		}
+	}
+}
+
+func exitHappy(args ...interface{}) {
+	fmt.Println(args...)
+	os.Exit(0)
+}
+
+func handleParseError(filename string) *github.PullRequestReviewRequest {
+	stdin := bufio.NewReader(os.Stdin)
+	for {
+		updated, err := editFile(filename)
+		if err == nil {
+			request, err := parseFile(updated)
+			if err == nil {
+				return request
+			}
+		}
+		fmt.Printf("error parsing file: %s\n", err)
+		fmt.Printf("edit again? [Y]/q ")
+		text, err := stdin.ReadString('\n')
+		if err != nil && err != io.EOF {
+			log.Fatal(err)
+		} else if err == io.EOF {
+			exitHappy()
+		}
+		text = strings.TrimRight(text, "\n")
+		if text == "y" || text == "Y" || text == "" {
+			continue
+		}
+		if text == "q" {
+			exitHappy()
+		}
+	}
+}
+
+func readPipe(cmd *exec.Cmd, buf *bytes.Buffer) error {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if _, err := buf.ReadFrom(stdout); err != nil {
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
 const timeFormat = "2006-01-02 15:04:05"
 
-func printPR(ctx context.Context, w io.Writer, pr *github.PullRequest) error {
-	// Fool Vim's filetype detector for Git commit messages
+func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest) error {
+	// Fool tpope/vim-git's filetype detector for Git commit messages
 	fmt.Fprint(w, "commit 0000000000000000000000000000000000000000\n")
-	fmt.Fprintf(w, "Author: %s\n", getUserLogin(pr.User))
+	fmt.Fprintf(w, "Author: %s <%s>\n", getUserLogin(pr.User), pr.User.Email)
 	fmt.Fprintf(w, "Date:   %s\n", getTime(pr.CreatedAt).Format(timeFormat))
 	fmt.Fprintf(w, "Title:  %s\n", getString(pr.Title))
 	fmt.Fprintf(w, "State:  %s\n", getString(pr.State))
@@ -129,7 +238,12 @@ func printPR(ctx context.Context, w io.Writer, pr *github.PullRequest) error {
 	if pr.ClosedAt != nil {
 		fmt.Fprintf(w, "Closed: %s\n", getTime(pr.ClosedAt).Format(timeFormat))
 	}
-	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pulls/%d\n", projectOwner, projectRepo, getInt(pr.Number))
+	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pulls/%d\n\n", projectOwner, projectRepo, getInt(pr.Number))
+
+	cmd := exec.Command("git", "diff", "--stat", fmt.Sprintf("%s...%s", *pr.Base.SHA, *pr.Head.SHA))
+	if err := readPipe(cmd, w); err != nil {
+		log.Fatal(err)
+	}
 
 	fmt.Fprintf(w, "\nCreated by %s (%s)\n", getUserLogin(pr.User), getTime(pr.CreatedAt).Format(timeFormat))
 	if pr.Body != nil {
@@ -167,8 +281,6 @@ func printPR(ctx context.Context, w io.Writer, pr *github.PullRequest) error {
 	fmt.Fprintf(w, `
 # Add top-level review comments by typing between the marker lines below.
 # Don't modify the markers!
-# Approve this PR by typing "APPROVE" on a line by itself.
-# Request changes on this PR by typing "DENY" on a line by itself.
 
 %s
 %s
@@ -188,25 +300,15 @@ var (
 	topLevelEndMarker   = "# ------ END OF TOP-LEVEL REVIEW COMMENTS ----- #"
 )
 
-func editText(original []byte) []byte {
-	f, err := ioutil.TempFile("", "re-edit-")
+func editFile(filename string) ([]byte, error) {
+	if err := runEditor(filename); err != nil {
+		return nil, err
+	}
+	updated, err := ioutil.ReadFile(filename)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
-	if err := ioutil.WriteFile(f.Name(), original, 0666); err != nil {
-		log.Fatal(err)
-	}
-	if err := runEditor(f.Name()); err != nil {
-		log.Fatal(err)
-	}
-	updated, err := ioutil.ReadFile(f.Name())
-	if err != nil {
-		log.Fatal(err)
-	}
-	name := f.Name()
-	f.Close()
-	os.Remove(name)
-	return updated
+	return updated, nil
 }
 
 func runEditor(filename string) error {
@@ -366,8 +468,11 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 			topLevelCommentStart = off
 			continue
 		} else if line == topLevelEndMarker {
-			body := string(dat[topLevelCommentStart : off-len(line)-2])
-			review.Body = &body
+			topLevelCommentEnd := off - len(line) - 2
+			if topLevelCommentEnd > topLevelCommentStart {
+				body := string(dat[topLevelCommentStart:topLevelCommentEnd])
+				review.Body = &body
+			}
 			topLevelCommentStart = 0
 			continue
 		} else if topLevelCommentStart != 0 {
