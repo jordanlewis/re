@@ -28,16 +28,15 @@ import (
 
 var (
 	project      = flag.String("p", "cockroachdb/cockroach", "GitHub owner/repo name")
+	resume       = flag.String("resume", "", "resume review from `file`")
 	tokenFile    = flag.String("token", "", "read GitHub token personal access token from `file` (default $HOME/.github-issue-token)")
 	projectOwner = ""
 	projectRepo  = ""
 )
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `usage: re [-p owner/repo] pr
+	fmt.Fprintf(os.Stderr, `usage: re [-p owner/repo] [-resume file] pr-number
 
-If query is a single number, prints the full history for the issue.
-Otherwise, prints a table of matching results.
 `)
 	flag.PrintDefaults()
 	os.Exit(2)
@@ -52,6 +51,7 @@ func main() {
 
 	q := strings.Join(flag.Args(), " ")
 	switch q {
+	// TODO(jordan) list prs with this
 	case "out":
 	case "in":
 	}
@@ -78,31 +78,37 @@ func main() {
 			log.Fatal(fmt.Errorf("invoking fetch: %v", err))
 		}
 
-		log.Printf("Fetching details for PR %d", n)
-		pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
-		if err != nil {
-			log.Fatal(err)
+		var filename string
+		if *resume != "" {
+			filename = *resume
+		} else {
+			log.Printf("Fetching details for PR %d", n)
+			pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			buf := bytes.NewBuffer(make([]byte, 0, 1024))
+			printPR(ctx, buf, pr)
+
+			pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
+			cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
+			if err := readPipe(cmd, buf); err != nil {
+				log.Fatal(err)
+			}
+
+			f, err := ioutil.TempFile("", "re-edit-")
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := ioutil.WriteFile(f.Name(), buf.Bytes(), 0666); err != nil {
+				log.Fatal(err)
+			}
+			filename = f.Name()
+			f.Close()
 		}
 
-		buf := bytes.NewBuffer(make([]byte, 0, 1024))
-		printPR(ctx, buf, pr)
-
-		pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
-		cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
-		if err := readPipe(cmd, buf); err != nil {
-			log.Fatal(err)
-		}
-
-		f, err := ioutil.TempFile("", "re-edit-")
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := ioutil.WriteFile(f.Name(), buf.Bytes(), 0666); err != nil {
-			log.Fatal(err)
-		}
-		f.Close()
-
-		request := decisionLoop(pr, f.Name())
+		request := decisionLoop(n, filename)
 		postComments(ctx, n, request)
 	}
 }
@@ -113,7 +119,7 @@ var (
 	reviewComment        = "COMMENT"
 )
 
-func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestReviewRequest {
+func decisionLoop(prNum int, filename string) *github.PullRequestReviewRequest {
 	defer os.Remove(filename)
 	stdin := bufio.NewReader(os.Stdin)
 	editReview := true
@@ -145,12 +151,12 @@ func decisionLoop(pr *github.PullRequest, filename string) *github.PullRequestRe
 			request.Event = nil
 			return request
 		case 's':
-			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", *pr.Number))
+			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", prNum))
 			err := cpCmd.Run()
 			if err != nil {
 				log.Fatal(err)
 			}
-			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", *pr.Number))
+			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", prNum))
 		case 'p':
 			editReview = false
 			fmt.Println(request)
