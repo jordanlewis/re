@@ -64,19 +64,18 @@ func main() {
 
 	n, _ := strconv.Atoi(q)
 	if n != 0 {
-		cmd := exec.Command("git", "fetch", "https://github.com/cockroachdb/cockroach", fmt.Sprintf("refs/pull/%d/head:reviews/pr/%d", n, n))
-
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		log.Printf("Fetching refs for PR %d", n)
-		if err := cmd.Run(); err != nil {
-			log.Fatal(fmt.Errorf("invoking fetch: %v", err))
-		}
-
 		var filename string
 		if *resume != "" {
 			filename = *resume
 		} else {
+			cmd := exec.Command("git", "fetch", "https://github.com/cockroachdb/cockroach", fmt.Sprintf("refs/pull/%d/head:reviews/pr/%d", n, n))
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			log.Printf("Fetching refs for PR %d", n)
+			if err := cmd.Run(); err != nil {
+				log.Fatal(fmt.Errorf("invoking fetch: %v", err))
+			}
+
 			log.Printf("Fetching details for PR %d", n)
 			pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
 			if err != nil {
