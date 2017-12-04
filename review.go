@@ -93,7 +93,7 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest) error
 	return nil
 }
 
-const (
+var (
 	reviewApprove        = "APPROVE"
 	reviewRequestChanges = "REQUEST_CHANGES"
 	reviewComment        = "COMMENT"
@@ -230,6 +230,7 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 			topLevelCommentEnd := off - len(line) - 2
 			if topLevelCommentEnd > topLevelCommentStart {
 				body := string(dat[topLevelCommentStart:topLevelCommentEnd])
+				body += "\n<!-- review by re -->"
 				review.Body = &body
 			}
 			topLevelCommentStart = 0
