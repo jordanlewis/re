@@ -79,7 +79,7 @@ func main() {
 			log.Printf("Fetching details for PR %d", n)
 			pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal(fmt.Errorf("getting pr: %v", err))
 			}
 
 			buf := bytes.NewBuffer(make([]byte, 0, 1024))
@@ -88,7 +88,7 @@ func main() {
 			pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
 			cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
 			if err := readPipe(cmd, buf); err != nil {
-				log.Fatal(err)
+				log.Fatal(fmt.Errorf("invoking git show: %v", err))
 			}
 
 			f, err := ioutil.TempFile("", "re-edit-")
@@ -127,16 +127,27 @@ func exitHappy(args ...interface{}) {
 func readPipe(cmd *exec.Cmd, buf *bytes.Buffer) error {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		log.Fatal(fmt.Errorf("stdoutpipe: %v", err))
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Fatal(fmt.Errorf("stderrpipe: %v", err))
 		return err
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		log.Fatal(fmt.Errorf("cmd start: %v", err))
 	}
 	if _, err := buf.ReadFrom(stdout); err != nil {
-		return err
+		log.Fatal(fmt.Errorf("ReadFrom: %v", err))
 	}
+	errBuf := new(bytes.Buffer)
+	if _, err := errBuf.ReadFrom(stderr); err != nil {
+		log.Fatal(fmt.Errorf("ReadFrom: %v", err))
+	}
+	fmt.Println(errBuf)
 	if err := cmd.Wait(); err != nil {
-		return err
+		log.Fatal(fmt.Errorf("cmd.Wait: %v", err))
 	}
 	return nil
 }
