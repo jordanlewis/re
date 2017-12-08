@@ -184,6 +184,8 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 		case 'q':
 			exitHappy()
 		case '?':
+			fallthrough
+		default:
 			editReview = false
 			color.Set(color.FgRed, color.Bold)
 			fmt.Println("y - submit comments")
