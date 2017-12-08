@@ -97,13 +97,21 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest) error
 			},
 		})
 		for _, com := range list {
-			fmt.Fprintf(w, "\nComment by %s (%s)\n", getUserLogin(com.User), getTime(com.CreatedAt).Format(timeFormat))
-			if com.Body != nil {
-				text := strings.TrimSpace(*com.Body)
-				if text != "" {
-					fmt.Fprintf(w, "\n\t%s\n", wrap(text, "\t"))
-				}
+			if com.Body == nil {
+				continue
 			}
+			text := strings.TrimSpace(*com.Body)
+			if text == "" {
+				continue
+			}
+			if strings.Contains(text, "<!-- Reviewable:start -->") {
+				continue
+			}
+			if strings.Contains(text, "<!-- Sent from Reviewable.io -->") {
+			}
+
+			fmt.Fprintf(w, "\nComment by %s (%s)\n", getUserLogin(com.User), getTime(com.CreatedAt).Format(timeFormat))
+			fmt.Fprintf(w, "\n\t%s\n", wrap(text, "\t"))
 		}
 		if err != nil {
 			return err
@@ -249,7 +257,10 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 
 	topLevelCommentStart := 0
 
-	review := &github.PullRequestReviewRequest{}
+	reviews := []*github.PullRequestReviewRequest{
+		&github.PullRequestReviewRequest{},
+	}
+	review := reviews[0]
 
 	off := 0
 	for _, line := range strings.SplitAfter(dat, "\n") {
