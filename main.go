@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/google/go-github/github"
 	"golang.org/x/oauth2"
 )
@@ -40,16 +41,7 @@ func usage() {
 func main() {
 	flag.Usage = usage
 	flag.Parse()
-	if flag.NArg() == 0 {
-		usage()
-	}
-
 	q := strings.Join(flag.Args(), " ")
-	switch q {
-	// TODO(jordan) list prs with this
-	case "out":
-	case "in":
-	}
 
 	f := strings.Split(*project, "/")
 	if len(f) != 2 {
@@ -68,42 +60,40 @@ func main() {
 		if *resume != "" {
 			filename = *resume
 		} else {
-			cmd := exec.Command("git", "fetch", "-f", "https://github.com/cockroachdb/cockroach", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			log.Printf("Fetching refs for PR %d", n)
-			if err := cmd.Run(); err != nil {
-				log.Fatal(fmt.Errorf("invoking fetch: %v", err))
-			}
-
-			log.Printf("Fetching details for PR %d", n)
-			pr, _, err := client.PullRequests.Get(ctx, projectOwner, projectRepo, n)
-			if err != nil {
-				log.Fatal(fmt.Errorf("getting pr: %v", err))
-			}
-
-			buf := bytes.NewBuffer(make([]byte, 0, 1024))
-			printPR(ctx, buf, pr)
-
-			pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
-			cmd = exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
-			if err := readPipe(cmd, buf); err != nil {
-				log.Fatal(fmt.Errorf("invoking git show: %v", err))
-			}
-
-			f, err := ioutil.TempFile("", "re-edit-")
-			if err != nil {
-				log.Fatal(err)
-			}
-			if err := ioutil.WriteFile(f.Name(), buf.Bytes(), 0666); err != nil {
-				log.Fatal(err)
-			}
-			filename = f.Name()
-			f.Close()
+			filename = makeReviewTemplate(ctx, n)
 		}
 
 		request := review(n, filename)
 		postComments(ctx, n, request)
+	} else {
+		user := loadUser()
+		mine, others, err := searchPRs(ctx, user)
+		if err != nil {
+			log.Fatal(err)
+		}
+		color.HiWhite("Created by me:")
+		printIssues(mine)
+		fmt.Println()
+		color.HiWhite("Involving me:")
+		printIssues(others)
+	}
+}
+
+func printIssues(issues []*github.Issue) {
+	usernameLength := 10
+	for _, issue := range issues {
+		curLen := len(getUserLogin(issue.User))
+		if curLen > usernameLength {
+			usernameLength = curLen
+		}
+	}
+	for _, issue := range issues {
+		c := color.GreenString
+		if getString(issue.State) == "closed" {
+			c = color.RedString
+		}
+		fmt.Printf("%5s  %-"+strconv.Itoa(usernameLength+1)+"s %s\n",
+			c("%d", getInt(issue.Number)), getUserLogin(issue.User), getString(issue.Title))
 	}
 }
 
@@ -149,7 +139,7 @@ func readPipe(cmd *exec.Cmd, buf *bytes.Buffer) error {
 		fmt.Println(errBuf)
 	}
 	if err := cmd.Wait(); err != nil {
-		log.Fatal(fmt.Errorf("cmd.Wait: %v", err))
+		return err
 	}
 	return nil
 }
@@ -250,6 +240,20 @@ func loadAuth() {
 		Source: &tokenSource{AccessToken: authToken},
 	}
 	client = github.NewClient(&http.Client{Transport: t})
+}
+
+func loadUser() string {
+	cmd := exec.Command("git", "config", "github.user")
+	buf := bytes.NewBuffer(make([]byte, 0, 30))
+	if err := readPipe(cmd, buf); err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			log.Fatal("reading github user: ", err, "\n\n",
+				"Please set your GitHub username:",
+				"git config --global github.user yourusername")
+		}
+		log.Fatal(fmt.Errorf("invoking git config github.user: %v", err))
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 type tokenSource oauth2.Token
