@@ -101,6 +101,7 @@ func postComments(ctx context.Context, pr int, review *github.PullRequestReviewR
 	fmt.Printf("Submitting review... ")
 	_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
 	if err != nil {
+		fmt.Printf("error: %v\n", err)
 		return err
 	}
 	fmt.Printf("success.\n")
