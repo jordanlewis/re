@@ -196,7 +196,7 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 					fmt.Fprintf(buf, " thread %d", *comment.ID)
 				}
 				buf.WriteString("\n")
-				fmt.Fprintf(buf, "\t%s\n", wrap(*comment.Body, "\t"))
+				fmt.Fprintf(buf, "\t%s\n", wrap(*comment.Body, "*\t"))
 			}
 			fmt.Fprintf(buf, "%s\n", inlineEndMarker)
 		}
