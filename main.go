@@ -201,10 +201,10 @@ func wrap(t string, prefix string) string {
 				i = 69
 			}
 			i++
-			out += s[:i] + "\n" + prefix
+			out += strings.TrimRight(s[:i], " ") + "\n" + prefix
 			s = s[i:]
 		}
-		out += s
+		out += strings.TrimRight(s, " ")
 	}
 	return out
 }

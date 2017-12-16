@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,11 +53,27 @@ func (c commitComments) put(comment *github.PullRequestComment) {
 	c[commit][file][line] = append(c[commit][file][line], comment)
 }
 
+// topLevelComment represents either a review comment or an issue comment.
+type topLevelComment struct {
+	body      string
+	author    string
+	createdAt time.Time
+	// Only for reviews
+	state    string
+	commitID string
+}
+
+type topLevelComments []topLevelComment
+
+func (c topLevelComments) Len() int           { return len(c) }
+func (c topLevelComments) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
+func (c topLevelComments) Less(i, j int) bool { return c[i].createdAt.Before(c[j].createdAt) }
+
 func makeReviewTemplate(ctx context.Context, n int) string {
 	log.Printf("Fetching details for PR %d", n)
 	var wg sync.WaitGroup
 	var showWg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	showWg.Add(2)
 	var pr *github.PullRequest
 	go func() {
@@ -69,6 +86,26 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 		showWg.Done()
 		wg.Done()
 		log.Printf("Fetched pr in %v", time.Now().Sub(start))
+	}()
+	reviews := make([]*github.PullRequestReview, 0, 10)
+	go func() {
+		start := time.Now()
+		for page := 1; ; {
+			list, resp, err := client.PullRequests.ListReviews(ctx, projectOwner, projectRepo, n, &github.ListOptions{
+				Page:    page,
+				PerPage: 100,
+			})
+			if err != nil {
+				log.Fatal(fmt.Errorf("invoking list reviews: %v", err))
+			}
+			reviews = append(reviews, list...)
+			if resp.NextPage < page {
+				break
+			}
+			page = resp.NextPage
+		}
+		wg.Done()
+		log.Printf("Fetched reviews in %v", time.Now().Sub(start))
 	}()
 	go func() {
 		start := time.Now()
@@ -143,8 +180,27 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 	}()
 	wg.Wait()
 
+	topLevelComments := make(topLevelComments, 0, len(reviews)+len(issueComments))
+	for _, r := range reviews {
+		topLevelComments = append(topLevelComments, topLevelComment{
+			body:      getString(r.Body),
+			createdAt: getTime(r.SubmittedAt),
+			author:    getUserLogin(r.User),
+			state:     getString(r.State),
+			commitID:  getString(r.CommitID),
+		})
+	}
+	for _, c := range issueComments {
+		topLevelComments = append(topLevelComments, topLevelComment{
+			body:      getString(c.Body),
+			createdAt: getTime(c.CreatedAt),
+			author:    getUserLogin(c.User),
+		})
+	}
+	sort.Sort(topLevelComments)
+
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
-	printPR(ctx, buf, pr, issueComments)
+	printPR(ctx, buf, pr, topLevelComments)
 
 	commit := ""
 	file := ""
@@ -224,7 +280,7 @@ var (
 	inlineEndMarker     = strings.Repeat("*", 79) + "^"
 )
 
-func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comments []*github.IssueComment) error {
+func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comments topLevelComments) error {
 	// Fool tpope/vim-git's filetype detector for Git commit messages
 	fmt.Fprint(w, "commit 0000000000000000000000000000000000000000\n")
 	fmt.Fprintf(w, "Author: %s <>\n", getUserLogin(pr.User))
@@ -253,10 +309,7 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comme
 	}
 
 	for _, com := range comments {
-		if com.Body == nil {
-			continue
-		}
-		text := strings.TrimSpace(*com.Body)
+		text := strings.TrimSpace(com.body)
 		if text == "" {
 			continue
 		}
@@ -268,7 +321,16 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comme
 			// TODO(jordan) parse Reviewable comments into inlie comments.
 		}
 
-		fmt.Fprintf(w, "\nComment by %s (%s)\n", getUserLogin(com.User), getTime(com.CreatedAt).Format(timeFormat))
+		action := "Comment"
+		switch com.state {
+		case reviewApprove:
+			action = "Approved"
+		case reviewRequestChanges:
+			action = "Changes requested"
+		case reviewPending:
+			action = "Draft comment"
+		}
+		fmt.Fprintf(w, "\n%s by %s (%s)\n", action, com.author, com.createdAt.Format(timeFormat))
 		fmt.Fprintf(w, "\n\t%s\n", wrap(text, "\t"))
 	}
 	fmt.Fprint(w, "\n")
@@ -293,6 +355,7 @@ var (
 	reviewApprove        = "APPROVE"
 	reviewRequestChanges = "REQUEST_CHANGES"
 	reviewComment        = "COMMENT"
+	reviewPending        = "PENDING"
 )
 
 func review(prNum int, filename string) *github.PullRequestReviewRequest {
