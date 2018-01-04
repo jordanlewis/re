@@ -124,7 +124,7 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 		// Can't show until fetch is performed and PR is fetched.
 		showWg.Wait()
 		start := time.Now()
-		pretty := `--pretty=tformat:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
+		pretty := `--pretty=format:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
 		cmd := exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
 		if err := readPipe(cmd, diffBuf); err != nil {
 			log.Fatal(fmt.Errorf("invoking git show: %v", err))
