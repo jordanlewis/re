@@ -553,17 +553,21 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 			continue
 		}
 
-		// Process special diff first-chars.
-		if len(line) > 0 {
-			switch line[0] {
-			case '+', '-', ' ', '@':
-				num++
-				continue
-			case '*', '\t':
-				// Old comment
-				continue
-			}
+		if len(line) == 0 {
+			// Empty line. Skip.
+			continue
 		}
+
+		// Process special diff first-chars.
+		switch line[0] {
+		case '+', '-', ' ', '@':
+			num++
+			continue
+		case '*', '\t':
+			// Old comment
+			continue
+		}
+
 		// We found a comment!
 		commentStart = lastCommentStart
 		if commentStart == -1 {
