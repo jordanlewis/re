@@ -63,8 +63,14 @@ func main() {
 			filename = makeReviewTemplate(ctx, n)
 		}
 
-		request := review(n, filename)
-		postComments(ctx, n, request)
+		requests := review(n, filename)
+		if err := postComments(ctx, n, requests); err != nil {
+			fmt.Printf("error: %v\n", err)
+			fmt.Printf("review preserved. resume with re -resume %s\n", filename)
+			os.Exit(1)
+		}
+		os.Remove(filename)
+		fmt.Printf("success.\n")
 	} else {
 		user := loadUser()
 		mine, others, err := searchPRs(ctx, user)
@@ -97,14 +103,17 @@ func printIssues(issues []*github.Issue) {
 	}
 }
 
-func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) error {
+func postComments(ctx context.Context, pr int, reviews []*github.PullRequestReviewRequest) error {
 	fmt.Printf("Submitting review... ")
-	_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
-	if err != nil {
-		fmt.Printf("error: %v\n", err)
-		return err
+	for _, review := range reviews {
+		if review.Body == nil && review.Comments == nil {
+			continue
+		}
+		fmt.Println(review)
+		if _, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review); err != nil {
+			return err
+		}
 	}
-	fmt.Printf("success.\n")
 	return nil
 }
 

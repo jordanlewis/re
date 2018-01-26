@@ -358,14 +358,19 @@ var (
 	reviewPending        = "PENDING"
 )
 
-func review(prNum int, filename string) *github.PullRequestReviewRequest {
-	defer os.Remove(filename)
+func setEvents(requests []*github.PullRequestReviewRequest, event *string) {
+	for _, request := range requests {
+		request.Event = event
+	}
+}
+
+func review(prNum int, filename string) []*github.PullRequestReviewRequest {
 	stdin := bufio.NewReader(os.Stdin)
 	editReview := true
-	var request *github.PullRequestReviewRequest
+	var requests []*github.PullRequestReviewRequest
 	for {
 		if editReview {
-			request = parseFileUntilSuccess(filename)
+			requests = parseFileUntilSuccess(filename)
 		}
 		editReview = true
 
@@ -378,17 +383,17 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 		}
 		switch text[0] {
 		case 'y':
-			request.Event = &reviewComment
-			return request
+			setEvents(requests, &reviewComment)
+			return requests
 		case 'a':
-			request.Event = &reviewApprove
-			return request
+			setEvents(requests, &reviewApprove)
+			return requests
 		case 'r':
-			request.Event = &reviewRequestChanges
-			return request
+			setEvents(requests, &reviewRequestChanges)
+			return requests
 		case 'd':
-			request.Event = nil
-			return request
+			setEvents(requests, nil)
+			return requests
 		case 's':
 			cpCmd := exec.Command("cp", filename, fmt.Sprintf("%d.redraft", prNum))
 			err := cpCmd.Run()
@@ -398,7 +403,7 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 			exitHappy("Saved draft as", fmt.Sprintf("%d.redraft", prNum))
 		case 'p':
 			editReview = false
-			fmt.Println(request)
+			fmt.Println(requests)
 			continue
 		case 'e':
 			continue
@@ -424,14 +429,14 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 	}
 }
 
-func parseFileUntilSuccess(filename string) *github.PullRequestReviewRequest {
+func parseFileUntilSuccess(filename string) []*github.PullRequestReviewRequest {
 	stdin := bufio.NewReader(os.Stdin)
 	for {
 		updated, err := editFile(filename)
 		if err == nil {
-			request, err := parseFile(updated)
+			requests, err := parseFile(updated)
 			if err == nil {
-				return request
+				return requests
 			}
 		}
 		fmt.Printf("error parsing file: %s\n", err)
@@ -458,10 +463,9 @@ var fileStart = regexp.MustCompile(`^\+\+\+ b\/(.*)$`)
 var hunkStart = `@@`
 var threadId = regexp.MustCompile(`^\* Comment by @\w+ \([^\)]+\) thread (\d+)$`)
 
-func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
+func parseFile(b []byte) ([]*github.PullRequestReviewRequest, error) {
 	dat := string(b)
 
-	commit := ""
 	file := ""
 	num := 0
 	foundFirstHunk := false
@@ -526,8 +530,14 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 		commitMatches := commitStart.FindStringSubmatch(line)
 		if len(commitMatches) > 1 {
 			foundFirstHunk = false
-			commit = commitMatches[1]
-			review.CommitID = &commit
+			if review.CommitID != nil {
+				fmt.Println("Old review, new review", *review.CommitID, commitMatches[1])
+				// We're moving on to a new commit.
+				// GitHub forces us to submit one review request per commit.
+				review = &github.PullRequestReviewRequest{}
+				reviews = append(reviews, review)
+			}
+			review.CommitID = &commitMatches[1]
 			continue
 		}
 
@@ -588,7 +598,7 @@ func parseFile(b []byte) (*github.PullRequestReviewRequest, error) {
 		c.Body = &body
 	}
 
-	return review, nil
+	return reviews, nil
 }
 
 func makeDraftReviewComment(path string, position int) *github.DraftReviewComment {
