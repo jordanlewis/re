@@ -109,7 +109,8 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 	}()
 	go func() {
 		start := time.Now()
-		cmd := exec.Command("git", "fetch", "-f", "https://github.com/cockroachdb/cockroach", "master", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
+		repoURL := fmt.Sprintf("https://github.com/%s/%s", projectOwner, projectRepo)
+		cmd := exec.Command("git", "fetch", "-f", repoURL, "master", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
