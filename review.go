@@ -294,7 +294,7 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comme
 	if pr.ClosedAt != nil {
 		fmt.Fprintf(w, "Closed: %s\n", getTime(pr.ClosedAt).Format(timeFormat))
 	}
-	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pulls/%d\n\n", projectOwner, projectRepo, getInt(pr.Number))
+	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pull/%d\n\n", projectOwner, projectRepo, getInt(pr.Number))
 
 	cmd := exec.Command("git", "diff", "--stat", fmt.Sprintf("%s...%s", *pr.Base.SHA, *pr.Head.SHA))
 	if err := readPipe(cmd, w); err != nil {
