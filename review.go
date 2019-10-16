@@ -377,6 +377,7 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 		} else if err == io.EOF {
 			exitHappy()
 		}
+		backupReview(filename)
 		switch text[0] {
 		case 'y':
 			request.Event = &reviewComment
@@ -422,6 +423,14 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 			color.Unset()
 			continue
 		}
+	}
+}
+
+func backupReview(filename string) {
+	backupReviewCmd := exec.Command("cp", filename, fmt.Sprintf("%s.bak", filename))
+	err := backupReviewCmd.Run()
+	if err != nil {
+		log.Fatal(err)
 	}
 }
 
