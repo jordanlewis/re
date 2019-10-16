@@ -364,6 +364,13 @@ func review(prNum int, filename string) *github.PullRequestReviewRequest {
 	stdin := bufio.NewReader(os.Stdin)
 	editReview := true
 	var request *github.PullRequestReviewRequest
+
+	backupReviewCmd := exec.Command("cp", filename, fmt.Sprintf("%s.bak", filename))
+	err := backupReviewCmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	for {
 		if editReview {
 			request = parseFileUntilSuccess(filename)
