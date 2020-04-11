@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "7fc7c7d8_b14822fb",
+        "filename": "review.go",
+        "patchSetId": 1
+      },
+      "lineNbr": 430,
+      "author": {
+        "id": 1017824
+      },
+      "writtenOn": "2020-04-11T03:17:54Z",
+      "side": 1,
+      "message": "test",
+      "revId": "fe23b8dbb78763d19d1ea19dbc384d4c675cff28",
+      "serverId": "d5d70762-12d0-45a1-890d-524b12d3f735",
+      "unresolved": true
+    }
+  ]
+}
