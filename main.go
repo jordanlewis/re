@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +25,7 @@ import (
 )
 
 var (
-	project      = flag.String("p", "cockroachdb/cockroach", "GitHub owner/repo name")
+	project      = flag.String("p", "", "GitHub owner/repo name (defaults to origin remote of enclosing git repo)")
 	resume       = flag.String("resume", "", "resume review from `file`")
 	tokenFile    = flag.String("token", "", "read GitHub token personal access token from `file` (default $HOME/.github-issue-token)")
 	projectOwner = ""
@@ -38,10 +40,51 @@ func usage() {
 	os.Exit(2)
 }
 
+var sshRe = regexp.MustCompile(`git@github.com:(\w+/\w+)`)
+var httpRe = regexp.MustCompile(`https?:github.com/(\w+/\w+)`)
+
+func inferProject() (string, error) {
+	var outBuf strings.Builder
+	var errBuf strings.Builder
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	errStr := errBuf.String()
+	if errStr != "" {
+		return "", errors.New(errStr)
+	}
+	url := outBuf.String()
+	var matches []string
+	for _, re := range []*regexp.Regexp{sshRe, httpRe} {
+		matches = re.FindStringSubmatch(url)
+		if len(matches) > 1 {
+			break
+		}
+	}
+	if len(matches) == 0 {
+		return "", errors.New("found no compatible remote")
+	}
+	return matches[1], nil
+}
+
 func main() {
 	flag.Usage = usage
 	flag.Parse()
 	q := strings.Join(flag.Args(), " ")
+
+	if *project == "" {
+		// Try to infer the owner and repo from the enclosing git repo.
+		p, err := inferProject()
+		if err == nil {
+			*project = p
+		} else {
+			fmt.Println("unable to infer project from git repo; assuming cockroachdb/cockroach")
+			*project = "cockroachdb/cockroach"
+		}
+	}
 
 	f := strings.Split(*project, "/")
 	if len(f) != 2 {
