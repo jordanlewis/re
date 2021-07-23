@@ -5,7 +5,7 @@ the terminal using your favorite `$EDITOR`.
 
 Install re:
 
-`go get github.com/jordanlewis/re`
+`go install github.com/jordanlewis/re`
 
 Add your GitHub API token to `~/.github-issue-token`.
 
