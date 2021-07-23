@@ -97,15 +97,13 @@ func printIssues(issues []*github.Issue) {
 	}
 }
 
-func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) error {
+func postComments(ctx context.Context, pr int, review *github.PullRequestReviewRequest) {
 	fmt.Printf("Submitting review... ")
 	_, _, err := client.PullRequests.CreateReview(ctx, projectOwner, projectRepo, pr, review)
 	if err != nil {
-		fmt.Printf("error: %v\n", err)
-		return err
+		log.Fatalf("error submitting review: %v", err)
 	}
-	fmt.Printf("success.\n")
-	return nil
+	fmt.Printf("posted to https://github.com/%s/%s/pull/%d\n", projectOwner, projectRepo, pr)
 }
 
 func exitHappy(args ...interface{}) {
