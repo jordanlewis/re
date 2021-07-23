@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/fatih/color"
@@ -72,9 +73,7 @@ func (c topLevelComments) Less(i, j int) bool { return c[i].createdAt.Before(c[j
 func makeReviewTemplate(ctx context.Context, n int) string {
 	log.Printf("Fetching details for PR %d", n)
 	var wg sync.WaitGroup
-	var showWg sync.WaitGroup
 	wg.Add(6)
-	showWg.Add(2)
 	var pr *github.PullRequest
 	go func() {
 		start := time.Now()
@@ -83,9 +82,70 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 		if err != nil {
 			log.Fatal(fmt.Errorf("getting pr: %v", err))
 		}
-		showWg.Done()
 		wg.Done()
+
 		log.Printf("Fetched pr in %v", time.Now().Sub(start))
+	}()
+
+	var diffStat strings.Builder
+	writer := tabwriter.NewWriter(&diffStat, 10, 4, 4, ' ', 0)
+	go func() {
+		opt := &github.ListOptions{PerPage: 200}
+		for {
+			files, resp, err := client.PullRequests.ListFiles(ctx, projectOwner, projectRepo, n, opt)
+			if err != nil {
+				log.Fatal(fmt.Errorf("getting pr files: %v", err))
+			}
+			for _, file := range files {
+				fmt.Fprintf(writer, "%s\t\t+%d\t-%d\n", file.GetFilename(), file.GetAdditions(), file.GetDeletions())
+			}
+
+			opt.Page = resp.NextPage
+			if opt.Page == 0 {
+				break
+			}
+		}
+		if err := writer.Flush(); err != nil {
+			panic(err)
+		}
+		wg.Done()
+	}()
+
+	diffBuf := bytes.NewBuffer(make([]byte, 0, 1024))
+	go func() {
+		commits, _, err := client.PullRequests.ListCommits(ctx, projectOwner, projectRepo, n, &github.ListOptions{})
+		if err != nil {
+			log.Fatal(fmt.Errorf("getting pr commits: %v", err))
+		}
+		for _, ghCommit := range commits {
+			raw, _, err := client.Repositories.GetCommitRaw(ctx, projectOwner, projectRepo, ghCommit.GetSHA(),
+				github.RawOptions{Type: github.Diff},
+				)
+			if err != nil {
+				log.Fatal(fmt.Errorf("getting pr commits: %v", err))
+			}
+			commit := ghCommit.GetCommit()
+			fmt.Fprintf(diffBuf, `
+commit %s
+Author:	%s <%s>
+Date:	%s
+
+`,
+				ghCommit.GetSHA(),
+				commit.GetAuthor().GetName(),
+				commit.GetAuthor().GetEmail(),
+				commit.Author.GetDate().Format(time.RubyDate),
+			)
+			message := commit.GetMessage()
+			for _, line := range strings.Split(message, "\n") {
+				diffBuf.WriteString("    ")
+				diffBuf.WriteString(line)
+				diffBuf.WriteByte('\n')
+			}
+			diffBuf.WriteByte('\n')
+			diffBuf.WriteString(raw)
+		}
+		wg.Done()
 	}()
 	reviews := make([]*github.PullRequestReview, 0, 10)
 	go func() {
@@ -106,32 +166,6 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 		}
 		wg.Done()
 		log.Printf("Fetched reviews in %v", time.Now().Sub(start))
-	}()
-	go func() {
-		start := time.Now()
-		repoURL := fmt.Sprintf("git@github.com:%s/%s.git", projectOwner, projectRepo)
-		cmd := exec.Command("git", "fetch", "-f", repoURL, "master", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Fatal(fmt.Errorf("invoking fetch: %v", err))
-		}
-		showWg.Done()
-		wg.Done()
-		log.Printf("Fetched refs in %v", time.Now().Sub(start))
-	}()
-	diffBuf := bytes.NewBuffer(make([]byte, 0, 1024))
-	go func() {
-		// Can't show until fetch is performed and PR is fetched.
-		showWg.Wait()
-		start := time.Now()
-		pretty := `--pretty=format:commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B`
-		cmd := exec.Command("git", "show", "--reverse", pretty, fmt.Sprintf("%s..%s", *pr.Base.SHA, *pr.Head.SHA))
-		if err := readPipe(cmd, diffBuf); err != nil {
-			log.Fatal(fmt.Errorf("invoking git show: %v", err))
-		}
-		wg.Done()
-		log.Printf("Showed diffs in %v", time.Now().Sub(start))
 	}()
 	issueComments := make([]*github.IssueComment, 0, 10)
 	go func() {
@@ -201,7 +235,7 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 	sort.Sort(topLevelComments)
 
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
-	printPR(ctx, buf, pr, topLevelComments)
+	printPR(ctx, buf, pr, diffStat.String(), topLevelComments)
 
 	commit := ""
 	file := ""
@@ -281,7 +315,8 @@ var (
 	inlineEndMarker     = strings.Repeat("*", 79) + "^"
 )
 
-func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comments topLevelComments) error {
+func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest,
+	diffstat string, comments topLevelComments) error {
 	// Fool tpope/vim-git's filetype detector for Git commit messages
 	fmt.Fprint(w, "commit 0000000000000000000000000000000000000000\n")
 	fmt.Fprintf(w, "Author: %s <>\n", getUserLogin(pr.User))
@@ -296,10 +331,7 @@ func printPR(ctx context.Context, w *bytes.Buffer, pr *github.PullRequest, comme
 	}
 	fmt.Fprintf(w, "URL:    https://github.com/%s/%s/pull/%d\n\n", projectOwner, projectRepo, getInt(pr.Number))
 
-	cmd := exec.Command("git", "diff", "--stat", fmt.Sprintf("%s...%s", *pr.Base.SHA, *pr.Head.SHA))
-	if err := readPipe(cmd, w); err != nil {
-		log.Fatal(err)
-	}
+	fmt.Fprint(w, diffstat)
 
 	fmt.Fprintf(w, "\nCreated by %s (%s)\n", getUserLogin(pr.User), getTime(pr.CreatedAt).Format(timeFormat))
 	if pr.Body != nil {
