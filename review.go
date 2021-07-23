@@ -109,7 +109,7 @@ func makeReviewTemplate(ctx context.Context, n int) string {
 	}()
 	go func() {
 		start := time.Now()
-		repoURL := fmt.Sprintf("https://github.com/%s/%s", projectOwner, projectRepo)
+		repoURL := fmt.Sprintf("git@github.com:%s/%s.git", projectOwner, projectRepo)
 		cmd := exec.Command("git", "fetch", "-f", repoURL, "master", fmt.Sprintf("refs/pull/%d/head:refs/reviews/%d", n, n))
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
