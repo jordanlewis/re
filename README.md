@@ -1,8 +1,15 @@
 `re` is a code review tool.  It lets you do Github code reviews from
 the terminal using your favorite `$EDITOR`.
 
-To use it, install the `re` binary in your `PATH`, and add your Github
-API token to `~/.github-issue-token`.
+## Installation
+
+Install re:
+
+`go get github.com/jordanlewis/re`
+
+Add your GitHub API token to `~/.github-issue-token`.
+
+## Usage
 
 Use the `-p` option to specify which GitHub project to search for PRs in. If
 you don't specify one, `re` will attempt to infer a GitHub project by looking
