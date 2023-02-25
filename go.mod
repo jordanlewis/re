@@ -12,6 +12,6 @@ require (
 	golang.org/x/net v0.0.0-20171212005608-d866cfc389ce // indirect
 	golang.org/x/oauth2 v0.0.0-20171226133531-197281d4e0ec
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
-	golang.org/x/sys v0.0.0-20171222143536-83801418e1b5 // indirect
+	golang.org/x/sys v0.1.0 // indirect
 	google.golang.org/appengine v1.0.0 // indirect
 )
